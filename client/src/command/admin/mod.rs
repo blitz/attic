@@ -1,5 +1,8 @@
+pub mod make_token;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use enum_as_inner::EnumAsInner;
 
 use crate::cli::Opts;
 
@@ -10,9 +13,9 @@ pub struct Admin {
     command: Command,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Subcommand, EnumAsInner)]
 pub enum Command {
-    // Nothing here yet.
+    MakeToken(make_token::MakeToken),
 }
 
 pub async fn run(opts: Opts) -> Result<()> {
@@ -20,6 +23,6 @@ pub async fn run(opts: Opts) -> Result<()> {
 
     #[allow(clippy::match_single_binding)]
     match &sub.command {
-        _ => todo!(),
+        Command::MakeToken(mt) => make_token::run(mt).await,
     }
 }
