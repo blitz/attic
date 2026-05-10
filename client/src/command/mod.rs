@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod cache;
 pub mod get_closure;
 pub mod login;
