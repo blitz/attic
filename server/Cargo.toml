@@ -13,11 +13,6 @@ name = "cellerd"
 path = "src/main.rs"
 doc = false
 
-[[bin]]
-name = "celleradm"
-path = "src/adm/main.rs"
-doc = false
-
 [dependencies]
 attic = { workspace = true, default-features = false, features = ["chunking", "io"] }
 attic-token.workspace = true
