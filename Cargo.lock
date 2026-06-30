@@ -524,7 +524,6 @@ dependencies = [
  "aws-sdk-s3",
  "axum",
  "axum-macros",
- "base64 0.23.1",
  "bytes",
  "chrono",
  "clap",

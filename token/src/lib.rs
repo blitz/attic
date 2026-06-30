@@ -86,7 +86,6 @@ mod tests;
 use std::collections::HashSet;
 use std::error::Error as StdError;
 
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use chrono::{DateTime, Utc};
 use displaydoc::Display;
 use indexmap::IndexMap;
@@ -429,24 +428,3 @@ impl CachePermission {
 }
 
 impl StdError for Error {}
-
-pub fn decode_token_hs256_secret_base64(s: &str) -> Result<HS256Key> {
-    let decoded = BASE64_STANDARD.decode(s).map_err(Error::Base64Error)?;
-    Ok(HS256Key::from_bytes(&decoded))
-}
-
-pub fn decode_token_rs256_secret_base64(s: &str) -> Result<RS256KeyPair> {
-    let decoded = BASE64_STANDARD.decode(s).map_err(Error::Base64Error)?;
-    let secret = std::str::from_utf8(&decoded).map_err(Error::Utf8Error)?;
-    let keypair = RS256KeyPair::from_pem(secret).map_err(Error::TokenError)?;
-
-    Ok(keypair)
-}
-
-pub fn decode_token_rs256_pubkey_base64(s: &str) -> Result<RS256PublicKey> {
-    let decoded = BASE64_STANDARD.decode(s).map_err(Error::Base64Error)?;
-    let pubkey = std::str::from_utf8(&decoded).map_err(Error::Utf8Error)?;
-    let pubkey = RS256PublicKey::from_pem(pubkey).map_err(Error::TokenError)?;
-
-    Ok(pubkey)
-}

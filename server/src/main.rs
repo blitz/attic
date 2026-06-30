@@ -67,7 +67,7 @@ async fn main() -> Result<()> {
     dump_version();
 
     let config =
-        config::load_config(opts.config.as_deref(), opts.mode == ServerMode::Monolithic).await?;
+        config::load_config(opts.config.as_deref()).await?;
 
     match opts.mode {
         ServerMode::Monolithic => {

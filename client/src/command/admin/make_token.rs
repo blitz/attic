@@ -6,7 +6,7 @@ use clap::Parser;
 use humantime::Duration;
 
 use attic::cache::CacheNamePattern;
-use attic_token::{decode_token_hs256_secret_base64, RS256KeyPair, SignatureType, Token};
+use attic_token::{HS256Key, RS256KeyPair, SignatureType, Token};
 
 /// Generate a new token.
 ///
@@ -21,7 +21,7 @@ pub struct MakeToken {
     ///
     /// For RS256 specify the path of a PEM file containing the secret key.
     ///
-    /// For HS256 specify a file that contains the BASE64-encoded secret key.
+    /// For HS256 specify a file that contains the raw secret key (not BASE64-encoded).
     #[clap(long = "signing-key", value_name = "SECRET_KEY")]
     signing_key: PathBuf,
 
@@ -145,14 +145,16 @@ pub async fn run(sub: &MakeToken) -> Result<()> {
     } else {
         let secret_key = std::fs::read(&sub.signing_key)
             .map_err(|e| anyhow!("Failed to read signing key: {}", e))?;
-        let secret_key = String::from_utf8(secret_key)
-            .map_err(|e| anyhow!("Cannot decode signing key: {}", e))?;
 
         let signature_type = match sub.signing_algorithm {
             SigningAlgorithm::HS256 => {
-                SignatureType::HS256(decode_token_hs256_secret_base64(&secret_key)?)
+                SignatureType::HS256(HS256Key::from_bytes(&secret_key))
             }
-            SigningAlgorithm::RS256 => SignatureType::RS256(RS256KeyPair::from_pem(&secret_key)?),
+            SigningAlgorithm::RS256 => {
+                let secret_key = String::from_utf8(secret_key)
+                    .map_err(|e| anyhow!("Cannot decode signing key: {}", e))?;
+                SignatureType::RS256(RS256KeyPair::from_pem(&secret_key)?)
+            }
         };
 
         let encoded_token = token.encode(
