@@ -15,13 +15,10 @@ let
       "cache configure"
       "cache destroy"
       "cache info"
+      "admin make-token"
     ];
     cellerd = [
       null
-    ];
-    celleradm = [
-      null
-      "make-token"
     ];
   };
   renderMarkdown = name: subcommands: ''
