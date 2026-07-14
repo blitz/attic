@@ -16,48 +16,6 @@ let
 
   format = pkgs.formats.toml { };
 
-  checkedConfigFile =
-    pkgs.runCommand "checked-celler-server.toml"
-      {
-        configFile = cfg.configFile;
-      }
-      ''
-        cat $configFile
-
-        export CELLER_SERVER_TOKEN_HS256_SECRET_BASE64="dGVzdCBzZWNyZXQ="
-        export CELLER_SERVER_DATABASE_URL="sqlite://:memory:"
-        ${cfg.package}/bin/cellerd --mode check-config -f $configFile
-        cat <$configFile >$out
-      '';
-
-  celleradmShim = pkgs.writeShellScript "celleradm" ''
-    if [ -n "$CELLERADM_PWD" ]; then
-      cd "$CELLERADM_PWD"
-      if [ "$?" != "0" ]; then
-        >&2 echo "Warning: Failed to change directory to $CELLERADM_PWD"
-      fi
-    fi
-
-    exec ${cfg.package}/bin/celleradm -f ${checkedConfigFile} "$@"
-  '';
-
-  celleradmWrapper = pkgs.writeShellScriptBin "cellerd-celleradm" ''
-    exec systemd-run \
-      --quiet \
-      --pipe \
-      --pty \
-      --wait \
-      --collect \
-      --service-type=exec \
-      --property=EnvironmentFile=${cfg.environmentFile} \
-      --property=DynamicUser=yes \
-      --property=User=${cfg.user} \
-      --property=Environment=CELLERADM_PWD=$(pwd) \
-      --working-directory / \
-      -- \
-      ${celleradmShim} "$@"
-  '';
-
   hasLocalPostgresDB =
     let
       url = cfg.settings.database.url or "";
@@ -71,12 +29,6 @@ let
     config.services.postgresql.enable && lib.hasPrefix "postgresql://" url && hasLocalStrings;
 in
 {
-  imports = [
-    (lib.mkRenamedOptionModule [ "services" "cellerd" "credentialsFile" ] [ "services" "cellerd" "environmentFile" ])
-  ];
-
-  disabledModules = [ "services/networking/atticd.nix" ];
-
   options = {
     services.cellerd = {
       enable = lib.mkEnableOption "the cellerd, the Nix Binary Cache server";
@@ -86,12 +38,12 @@ in
       environmentFile = lib.mkOption {
         description = ''
           Path to an EnvironmentFile containing required environment
-          variables:
+          variables. This is usually used to provide S3 credentials.
 
-          - CELLER_SERVER_TOKEN_RS256_SECRET_BASE64: The base64-encoded RSA PEM PKCS1 of the
-            RS256 JWT secret. Generate it with `openssl genrsa -traditional 4096 | base64 -w0`.
+          NOTE: JWT secrets can only be provided via services.cellerd.settings.jwt.
+          See the documentation for details.
         '';
-        type = types.nullOr types.path;
+        type = lib.types.nullOr lib.types.externalPath;
         default = null;
       };
 
@@ -165,29 +117,6 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    assertions = [
-      {
-        assertion = cfg.environmentFile != null;
-        message = ''
-          <option>services.cellerd.environmentFile</option> is not set.
-
-          Run `openssl genrsa -traditional -out private_key.pem 4096 | base64 -w0` and create a file with the following contents:
-
-          CELLER_SERVER_TOKEN_RS256_SECRET_BASE64="output from command"
-
-          Then, set `services.cellerd.environmentFile` to the quoted absolute path of the file.
-        '';
-      }
-      {
-        assertion = !lib.isStorePath cfg.environmentFile;
-        message = ''
-          <option>services.cellerd.environmentFile</option> points to a path in the Nix store. The Nix store is globally readable.
-
-          You should use a quoted absolute path to prevent leaking secrets in the Nix store.
-        '';
-      }
-    ];
-
     services.cellerd.settings = {
       database.url = lib.mkDefault "sqlite:///var/lib/cellerd/server.db?mode=rwc";
 
@@ -206,7 +135,7 @@ in
       wants = [ "network-online.target" ];
 
       serviceConfig = {
-        ExecStart = "${cfg.package}/bin/cellerd -f ${checkedConfigFile} --mode ${cfg.mode}";
+        ExecStart = "${cfg.package}/bin/cellerd -f ${cfg.configFile} --mode ${cfg.mode}";
         EnvironmentFile = cfg.environmentFile;
         StateDirectory = "cellerd"; # for usage with local storage and sqlite
         DynamicUser = true;
@@ -258,10 +187,6 @@ in
         UMask = "0077";
       };
     };
-
-    environment.systemPackages = [
-      celleradmWrapper
-    ];
 
     nixpkgs.overlays = lib.mkIf cfg.useFlakeCompatOverlay [
       overlay
