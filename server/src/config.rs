@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use async_compression::Level as CompressionLevel;
 use attic_token::SignatureType;
 use serde::{de, Deserialize};
@@ -125,35 +125,44 @@ pub struct JWTConfig {
     #[serde(default = "Default::default")]
     pub token_bound_audiences: Option<HashSet<String>>,
 
-    /// JSON Web Token signing.
-    #[serde(rename = "signing")]
-    #[debug(skip)]
-    pub signing_config: JWTSigningConfig,
-}
-
-/// JSON Web Token signing configuration.
-#[derive(Clone, Deserialize)]
-pub enum JWTSigningConfig {
-    /// JSON Web Token RSA pubkey.
-    ///
-    /// Point this to a RSA PEM public key file to use for verifying JWTs.
+    /// Accepts a path to a RSA PEM public key file for verifying JWTs via
+    /// RS256.
     #[serde(deserialize_with = "deserialize_rs256_public_key_file")]
-    RS256PublicKeyFile(RS256PublicKey),
+    #[serde(rename = "rs256-public-key-file")]
+    #[serde(default)]
+    pub rs256_public_key_file: Option<RS256PublicKey>,
 
-    /// JSON Web Token HMAC secret.
-    ///
-    /// Point this to a file containing the raw (non-base64-encoded) HMAC secret
-    /// to use for verifying JWTs.
+    /// Accepts a path to a HMAC secret key file for verifying JWTs via
+    /// HS256.
     #[serde(deserialize_with = "deserialize_hs256_secret_key_file")]
-    HS256SecretKeyFile(HS256Key),
+    #[serde(rename = "hs256-secret-key-file")]
+    #[serde(default)]
+    pub hs256_secret_key_file: Option<HS256Key>,
 }
 
-impl From<JWTSigningConfig> for SignatureType {
-    fn from(value: JWTSigningConfig) -> Self {
-        match value {
-            JWTSigningConfig::RS256PublicKeyFile(key) => Self::RS256PubkeyOnly(key),
-            JWTSigningConfig::HS256SecretKeyFile(key) => Self::HS256(key),
+impl JWTConfig {
+    /// Validate the JWT signing configuration.
+    fn validate(&self) -> Result<(), anyhow::Error> {
+        // We could handle this more gracefully using a custom deserializer, but this is quite a lot of hassle.
+        if self.rs256_public_key_file.is_none() && self.hs256_secret_key_file.is_none() {
+            bail!("No JWT signing configuration specified. Either rs256-public-key-file or hs256-secret-key-file must be set.");
         }
+        if self.rs256_public_key_file.is_some() && self.hs256_secret_key_file.is_some() {
+            bail!("Both rs256-public-key-file and hs256-secret-key-file are set. Only one can be set at a time.");
+        }
+        Ok(())
+    }
+}
+
+impl From<JWTConfig> for SignatureType {
+    fn from(value: JWTConfig) -> Self {
+        if let Some(key) = value.rs256_public_key_file {
+            return Self::RS256PubkeyOnly(key);
+        }
+        if let Some(key) = value.hs256_secret_key_file {
+            return Self::HS256(key);
+        }
+        panic!("No JWT signing configuration specified. This should not happen.");
     }
 }
 
@@ -321,7 +330,7 @@ impl Default for GarbageCollectionConfig {
     }
 }
 
-fn deserialize_rs256_public_key_file<'de, D>(deserializer: D) -> Result<RS256PublicKey, D::Error>
+fn deserialize_rs256_public_key_file<'de, D>(deserializer: D) -> Result<Option<RS256PublicKey>, D::Error>
 where
     D: de::Deserializer<'de>,
 {
@@ -330,10 +339,10 @@ where
     let path = PathBuf::deserialize(deserializer)?;
     let key = RS256PublicKey::from_pem(&std::fs::read_to_string(&path).map_err(Error::custom)?).map_err(Error::custom)?;
 
-    Ok(key)
+    Ok(Some(key))
 }
 
-fn deserialize_hs256_secret_key_file<'de, D>(deserializer: D) -> Result<HS256Key, D::Error>
+fn deserialize_hs256_secret_key_file<'de, D>(deserializer: D) -> Result<Option<HS256Key>, D::Error>
 where
     D: de::Deserializer<'de>,
 {
@@ -342,7 +351,7 @@ where
     let path = PathBuf::deserialize(deserializer)?;
     let key = HS256Key::from_bytes(&std::fs::read(&path).map_err(Error::custom)?);
 
-    Ok(key)
+    Ok(Some(key))
 }
 
 fn default_listen_address() -> SocketAddr {
@@ -377,7 +386,11 @@ fn load_config_from_path(path: &Path) -> Result<Config> {
     tracing::info!("Using configurations: {:?}", path);
 
     let config = std::fs::read_to_string(path)?;
-    Ok(toml::from_str(&config)?)
+    let config: Config = toml::from_str(&config)?;
+
+    config.jwt.validate()?;
+
+    Ok(config)
 }
 
 /// Loads the configuration in the standard order.

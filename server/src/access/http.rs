@@ -101,7 +101,7 @@ pub async fn apply_auth(req: Request, next: Next) -> Response {
         .and_then(parse_authorization_header)
         .and_then(|jwt| {
             let state = req.extensions().get::<State>().unwrap();
-            let signature_type = state.config.jwt.signing_config.clone().into();
+            let signature_type = state.config.jwt.clone().into();
 
             let res_token = Token::from_jwt(
                 &jwt,
