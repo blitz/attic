@@ -1,7 +1,6 @@
 //! Server configuration.
 
 use std::collections::HashSet;
-use std::env;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -22,9 +21,6 @@ use crate::storage::{LocalStorageConfig, S3StorageConfig};
 ///
 /// This will be concatenated into `$XDG_CONFIG_HOME/celler`.
 const XDG_PREFIX: &str = "celler";
-
-/// Environment variable storing the database connection string.
-const ENV_DATABASE_URL: &str = "CELLER_SERVER_DATABASE_URL";
 
 /// Configuration for the Attic Server.
 #[derive(Clone, Deserialize, derive_more::Debug)]
@@ -165,7 +161,6 @@ impl From<JWTSigningConfig> for SignatureType {
 #[derive(Debug, Clone, Deserialize)]
 pub struct DatabaseConfig {
     /// Connection URL.
-    #[serde(default = "load_database_url_from_env")]
     pub url: String,
 
     /// Whether to enable sending of periodic heartbeat queries.
@@ -280,15 +275,6 @@ pub struct GarbageCollectionConfig {
     #[serde(rename = "default-retention-period")]
     #[serde(with = "humantime_serde", default = "default_default_retention_period")]
     pub default_retention_period: Duration,
-}
-
-fn load_database_url_from_env() -> String {
-    env::var(ENV_DATABASE_URL).unwrap_or_else(|_| {
-        panic!(
-            "Database URL must be specified in either database.url \
-        or the {ENV_DATABASE_URL} environment."
-        )
-    })
 }
 
 impl CompressionConfig {
