@@ -32,6 +32,9 @@ pub enum AtticError {
     /// Invalid cache name "{name}"
     InvalidCacheName { name: String },
 
+    /// Nix daemon query "{op}" failed: {reason}
+    DaemonQueryError { op: &'static str, reason: String },
+
     /// Signing error: {0}
     SigningError(super::signing::Error),
 
@@ -51,6 +54,7 @@ impl AtticError {
             Self::InvalidStorePathName { .. } => "InvalidStorePathName",
             Self::InvalidStorePathHash { .. } => "InvalidStorePathHash",
             Self::InvalidCacheName { .. } => "InvalidCacheName",
+            Self::DaemonQueryError { .. } => "DaemonQueryError",
             Self::SigningError(_) => "SigningError",
             Self::HashError(_) => "HashError",
             Self::IoError { .. } => "IoError",

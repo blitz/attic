@@ -1,6 +1,6 @@
 //! High-level Nix Store interface.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::str::FromStr as _;
 use std::sync::Arc;
@@ -12,7 +12,7 @@ use tokio::net::UnixStream;
 use tokio::sync::Mutex;
 use tokio_util::io::ReaderStream;
 
-use super::{to_base_name, StorePath, ValidPathInfo};
+use super::{to_base_name, FloatingOutput, StorePath, ValidPathInfo};
 use crate::error::AtticResult;
 use crate::hash::Hash;
 use crate::AtticError;
@@ -212,6 +212,107 @@ impl NixStore {
             .unwrap_or(false))
     }
 
+    /// Identifies the derivation output a path realized to, if it was floating.
+    ///
+    /// Returns `None` when the path is not floating, or when its deriver is gone
+    /// and the question cannot be answered.
+    pub async fn floating_output(
+        &self,
+        path: impl AsRef<StorePath>,
+        deriver: &str,
+    ) -> AtticResult<Option<FloatingOutput>> {
+        let path = path.as_ref();
+
+        // Only a floating output is absent from the derivation output table, so
+        // a deriver recorded there means the path was known ahead of the build.
+        //
+        // An empty result also covers a path whose deriver is gone, which the
+        // validity check below separates out. Keep the two checks in this
+        // order.
+        if !self.query_valid_derivers(path).await?.is_empty() {
+            return Ok(None);
+        }
+
+        // The deriver of a substituted path is generally not in the store,
+        // since `nix copy` does not transfer `.drv` files, and a built path can
+        // outlive its deriver.
+        let deriver_path = self.parse_store_path(deriver)?;
+        if !self.is_valid_path(&deriver_path).await? {
+            return Ok(None);
+        }
+
+        let drv_name = deriver_path
+            .as_os_str()
+            .to_str()
+            .ok_or_else(|| AtticError::InvalidStorePath {
+                path: deriver_path.base_name.clone(),
+                reason: "Invalid UTF-8",
+            })?
+            .to_owned();
+
+        let outputs = self.query_derivation_output_map(deriver).await?;
+        let output_name = outputs
+            .into_iter()
+            .find(|(_, out)| self.parse_store_path(out).ok().as_ref() == Some(path))
+            .map(|(output_name, _)| output_name)
+            .ok_or_else(|| AtticError::InvalidStorePath {
+                path: path.base_name.clone(),
+                reason: "Deriver has no output matching this path",
+            })?;
+
+        Ok(Some(FloatingOutput {
+            drv_name,
+            output_name,
+        }))
+    }
+
+    /// Returns the derivations in the store known to produce a path.
+    ///
+    /// Returns nothing for a floating content-addressed output.
+    pub async fn query_valid_derivers(
+        &self,
+        store_path: impl AsRef<StorePath>,
+    ) -> AtticResult<Vec<String>> {
+        let full_store_path = self.get_full_path(&store_path);
+        let full_store_path_str =
+            full_store_path
+                .to_str()
+                .ok_or_else(|| AtticError::InvalidStorePath {
+                    path: full_store_path.clone(),
+                    reason: "Invalid UTF-8",
+                })?;
+
+        let mut daemon = self.daemon.lock().await;
+        daemon
+            .query_valid_derivers(full_store_path_str)
+            .result()
+            .await
+            .map_err(|e| AtticError::DaemonQueryError {
+                op: "QueryValidDerivers",
+                reason: e.to_string(),
+            })
+    }
+
+    /// Maps each output of a derivation to the store path it realized to.
+    ///
+    /// For a content-addressed derivation the daemon answers from the local
+    /// build trace, so this only returns outputs that have been built on this
+    /// machine.
+    pub async fn query_derivation_output_map(
+        &self,
+        drv_path: &str,
+    ) -> AtticResult<HashMap<String, String>> {
+        let mut daemon = self.daemon.lock().await;
+        daemon
+            .query_derivation_output_map(drv_path)
+            .result()
+            .await
+            .map_err(|e| AtticError::DaemonQueryError {
+                op: "QueryDerivationOutputMap",
+                reason: e.to_string(),
+            })
+    }
+
     /// Returns detailed information on a path.
     pub async fn query_path_info(
         &self,
@@ -252,6 +353,7 @@ impl NixStore {
                         .collect::<AtticResult<Vec<_>>>()?,
                     sigs: path_info.signatures,
                     ca: path_info.ca,
+                    deriver: path_info.deriver,
                 })
             })
             .transpose()

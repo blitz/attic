@@ -142,11 +142,37 @@ pub struct ValidPathInfo {
 
     /// Content Address.
     pub ca: Option<String>,
+
+    /// The derivation that produced this path, as a full path.
+    ///
+    /// A floating content-addressed output needs its deriver to get a build
+    /// trace, and the client skips any path whose deriver is `None` without
+    /// warning, so an empty field here means the path is pushed and then
+    /// rebuilt on every machine that pulls it.
+    ///
+    /// The daemon supplies this in its `QueryPathInfo` reply. Fetching it on
+    /// demand through `QueryValidDerivers` looks equivalent and is not,
+    /// because that query returns an empty list for a floating output even
+    /// while the output's `.drv` is valid in the store.
+    pub deriver: Option<String>,
+}
+
+/// A derivation output whose store path was not known before it was built.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FloatingOutput {
+    /// Base name of the derivation, including the `.drv` suffix.
+    pub drv_name: String,
+
+    /// Name of the output, such as `out` or `dev`.
+    pub output_name: String,
 }
 
 impl StorePath {
     /// Creates a StorePath with a base name.
-    fn from_base_name(base_name: impl AsRef<Path>) -> AtticResult<Self> {
+    ///
+    /// This validates the format, so it doubles as the check for a base name
+    /// that arrived from an untrusted source.
+    pub fn from_base_name(base_name: impl AsRef<Path>) -> AtticResult<Self> {
         let base_name = base_name.as_ref().to_owned();
         let s = base_name
             .as_os_str()
