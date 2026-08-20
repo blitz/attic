@@ -40,8 +40,17 @@ use attic::error::AtticResult;
 use attic::nix_store::{NixStore, StorePath, StorePathHash, ValidPathInfo};
 use tracing::error;
 
-type JobSender = channel::Sender<ValidPathInfo>;
-type JobReceiver = channel::Receiver<ValidPathInfo>;
+type JobSender = channel::Sender<PushJob>;
+type JobReceiver = channel::Receiver<PushJob>;
+
+/// A unit of work for a push worker.
+enum PushJob {
+    /// Upload the NAR, then record a build trace if the path needs one.
+    Upload(ValidPathInfo),
+
+    /// Record only the build trace, for a path the cache already holds.
+    RecordTrace { path: StorePath, deriver: String },
+}
 
 /// Configuration for pushing store paths.
 #[derive(Clone, Copy, Debug)]
@@ -126,6 +135,11 @@ pub struct PushPlan {
     /// Store paths to push.
     pub store_path_map: HashMap<StorePathHash, ValidPathInfo>,
 
+    /// Cached paths whose build trace still needs recording.
+    ///
+    /// A cache can hold the NAR while the trace is still missing.
+    pub traces_to_record: Vec<(StorePath, String)>,
+
     /// The number of paths in the original full closure.
     pub num_all_paths: usize,
 
@@ -177,7 +191,19 @@ impl Pusher {
 
     /// Queues a store path to be pushed.
     pub async fn queue(&self, path_info: ValidPathInfo) -> Result<()> {
-        self.sender.send(path_info).await.map_err(|e| anyhow!(e))
+        self.send(PushJob::Upload(path_info)).await
+    }
+
+    /// Queues a path for build-trace recording only.
+    ///
+    /// The push plan skips paths the cache already holds, so they would
+    /// otherwise never get a trace.
+    pub async fn queue_trace_only(&self, path: StorePath, deriver: String) -> Result<()> {
+        self.send(PushJob::RecordTrace { path, deriver }).await
+    }
+
+    async fn send(&self, job: PushJob) -> Result<()> {
+        self.sender.send(job).await.map_err(|e| anyhow!(e))
     }
 
     /// Waits for all workers to terminate, returning all results.
@@ -237,25 +263,34 @@ impl Pusher {
         let mut results = HashMap::new();
 
         loop {
-            let path_info = match receiver.recv().await {
-                Ok(path_info) => path_info,
+            let job = match receiver.recv().await {
+                Ok(job) => job,
                 Err(_) => {
                     // channel is closed - we are done
                     break;
                 }
             };
 
-            let store_path = path_info.path.clone();
-
-            let r = upload_path(
-                path_info,
-                store.clone(),
-                api.clone(),
-                &cache,
-                mp.clone(),
-                config.force_preamble,
-            )
-            .await;
+            let (store_path, r) = match job {
+                PushJob::Upload(path_info) => {
+                    let store_path = path_info.path.clone();
+                    let r = upload_path(
+                        path_info,
+                        store.clone(),
+                        api.clone(),
+                        &cache,
+                        mp.clone(),
+                        config.force_preamble,
+                    )
+                    .await;
+                    (store_path, r)
+                }
+                // A trace failure only warns, so this arm is always `Ok`.
+                PushJob::RecordTrace { path, deriver } => {
+                    record_build_trace_or_warn(&path, &deriver, &store, &api, &cache, &mp).await;
+                    (path, Ok(()))
+                }
+            };
 
             results.insert(store_path, r);
         }
@@ -358,6 +393,10 @@ impl PushSession {
             let mut known_paths = known_paths_mutex.lock().await;
             plan.store_path_map
                 .retain(|sph, _| !known_paths.contains(sph));
+            // A batch recomputes the plan from scratch, so without this every
+            // already-cached path is re-queued on every batch, forever.
+            plan.traces_to_record
+                .retain(|(path, _)| !known_paths.contains(&path.to_hash()));
 
             // Push everything
             for (store_path_hash, path_info) in plan.store_path_map.into_iter() {
@@ -365,6 +404,15 @@ impl PushSession {
                     .queue(path_info)
                     .await
                     .context("Failed to queue path for upload")?;
+                known_paths.insert(store_path_hash);
+            }
+
+            for (path, deriver) in plan.traces_to_record {
+                let store_path_hash = path.to_hash();
+                pusher
+                    .queue_trace_only(path, deriver)
+                    .await
+                    .context("Failed to queue path for build trace recording")?;
                 known_paths.insert(store_path_hash);
             }
 
@@ -463,6 +511,7 @@ impl PushPlan {
         if store_path_map.is_empty() {
             return Ok(Self {
                 store_path_map,
+                traces_to_record: Vec::new(),
                 num_all_paths,
                 num_already_cached: 0,
                 num_upstream: 0,
@@ -492,6 +541,7 @@ impl PushPlan {
         if store_path_map.is_empty() {
             return Ok(Self {
                 store_path_map,
+                traces_to_record: Vec::new(),
                 num_all_paths,
                 num_already_cached: 0,
                 num_upstream: num_all_paths - num_filtered_paths,
@@ -504,11 +554,27 @@ impl PushPlan {
             let res = api.get_missing_paths(cache, store_path_hashes).await?;
             res.missing_paths.into_iter().collect()
         };
-        store_path_map.retain(|sph, _| missing_path_hashes.contains(sph));
+        // A trace is a separate fact from the NAR, so an already-cached path
+        // may still be missing one.
+        let (missing, already_cached): (HashMap<_, _>, HashMap<_, _>) = store_path_map
+            .into_iter()
+            .partition(|(sph, _)| missing_path_hashes.contains(sph));
+
+        store_path_map = missing;
+
+        // This drops every path without a content address or a deriver, so a
+        // caller can queue each remaining entry without checking again.
+        let traces_to_record = already_cached
+            .into_values()
+            .filter(|pi| pi.ca.is_some())
+            .filter_map(|pi| Some((pi.path, pi.deriver?)))
+            .collect();
+
         let num_missing_paths = store_path_map.len();
 
         Ok(Self {
             store_path_map,
+            traces_to_record,
             num_all_paths,
             num_already_cached: num_filtered_paths - num_missing_paths,
             num_upstream: num_all_paths - num_filtered_paths,
@@ -526,6 +592,8 @@ pub async fn upload_path(
     force_preamble: bool,
 ) -> Result<()> {
     let path = &path_info.path;
+    let is_content_addressed = path_info.ca.is_some();
+    let deriver = path_info.deriver.clone();
     let upload_info = {
         let full_path = store
             .get_full_path(path)
@@ -626,7 +694,14 @@ pub async fn upload_path(
                     info_string
                 );
             });
+
             bar.finish_and_clear();
+
+            if is_content_addressed {
+                if let Some(deriver) = deriver.as_deref() {
+                    record_build_trace_or_warn(path, deriver, &store, &api, cache, &mp).await;
+                }
+            }
 
             Ok(())
         }
@@ -638,6 +713,49 @@ pub async fn upload_path(
             Err(e)
         }
     }
+}
+
+/// Records a path's build trace, reporting a failure as a warning.
+async fn record_build_trace_or_warn(
+    path: &StorePath,
+    deriver: &str,
+    store: &NixStore,
+    api: &ApiClient,
+    cache: &CacheName,
+    mp: &MultiProgress,
+) {
+    if let Err(e) = upload_build_trace(path, deriver, store, api, cache).await {
+        mp.suspend(|| {
+            eprintln!(
+                "⚠️ {}: failed to record build trace: {}",
+                path.as_os_str().to_string_lossy(),
+                e
+            );
+        });
+    }
+}
+
+/// Records the build trace covering a content-addressed path.
+async fn upload_build_trace(
+    path: &StorePath,
+    deriver: &str,
+    store: &NixStore,
+    api: &ApiClient,
+    cache: &CacheName,
+) -> Result<()> {
+    let base_name = path
+        .as_os_str()
+        .to_str()
+        .ok_or_else(|| anyhow!("Path contains non-UTF-8"))?;
+
+    // `ca` is set for fixed-output derivations too, and only the store can
+    // tell those from a floating output.
+    let Some(output) = store.floating_output(path, deriver).await? else {
+        return Ok(());
+    };
+
+    api.put_build_trace(cache, &output.drv_name, &output.output_name, base_name)
+        .await
 }
 
 impl<S: Stream<Item = AtticResult<Bytes>>> NarStreamProgress<S> {

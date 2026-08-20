@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `CELLER_TOKEN` environment variable as an alternative to `celler login`, useful for CI and scripted use.
 - `celler push` now prints the total NAR size.
+- Build trace support, so Nix can substitute the outputs of content-addressed derivations. Requires Nix 2.35 or newer on the client. Older Nix and Lix use a different scheme and cannot substitute.
 
 ### Changed
 

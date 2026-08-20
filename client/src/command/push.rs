@@ -101,7 +101,7 @@ impl PushContext {
             .plan(roots, self.no_closure, self.ignore_upstream_cache_filter)
             .await?;
 
-        if plan.store_path_map.is_empty() {
+        if plan.store_path_map.is_empty() && plan.traces_to_record.is_empty() {
             if plan.num_all_paths == 0 {
                 eprintln!("🤷 Nothing selected.");
             } else {
@@ -113,6 +113,14 @@ impl PushContext {
             }
 
             return Ok(());
+        }
+
+        if plan.store_path_map.is_empty() {
+            eprintln!(
+                "✅ All NARs cached ({num_already_cached} already cached, {num_upstream} in upstream), checking build traces...",
+                num_already_cached = plan.num_already_cached,
+                num_upstream = plan.num_upstream,
+            );
         } else {
             eprintln!("⚙️ Pushing {num_missing_paths} paths to \"{cache}\" on \"{server}\" ({num_already_cached} already cached, {num_upstream} in upstream)...",
                 cache = self.cache_name.as_str(),
@@ -125,6 +133,10 @@ impl PushContext {
 
         for (_, path_info) in plan.store_path_map {
             self.pusher.queue(path_info).await?;
+        }
+
+        for (path, deriver) in plan.traces_to_record {
+            self.pusher.queue_trace_only(path, deriver).await?;
         }
 
         let results = self.pusher.wait().await;

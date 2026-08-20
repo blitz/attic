@@ -17,6 +17,7 @@ use serde::Deserialize;
 
 use crate::config::ServerConfig;
 use crate::version::CELLER_DISTRIBUTOR;
+use attic::api::v1::build_trace::{BuildTraceEntry, BUILD_TRACE_PREFIX, BUILD_TRACE_SUFFIX};
 use attic::api::v1::cache_config::{CacheConfig, CreateCacheRequest};
 use attic::api::v1::get_missing_paths::{GetMissingPathsRequest, GetMissingPathsResponse};
 use attic::api::v1::upload_path::{
@@ -162,6 +163,44 @@ impl ApiClient {
         if res.status().is_success() {
             let cache_config = res.json().await?;
             Ok(cache_config)
+        } else {
+            let api_error = ApiError::try_from_response(res).await?;
+            Err(api_error.into())
+        }
+    }
+
+    /// Records the store path that a derivation output realized to.
+    pub async fn put_build_trace(
+        &self,
+        cache: &CacheName,
+        drv_name: &str,
+        output_name: &str,
+        out_path: &str,
+    ) -> Result<()> {
+        // `?` is legal in a store path name, and interpolating one
+        // into the URL would turn the rest of the path into a query
+        // string, so this appends the segments one at a time instead.
+        let mut endpoint = self.endpoint.clone();
+        endpoint
+            .path_segments_mut()
+            .map_err(|_| anyhow::anyhow!("API endpoint cannot be a base"))?
+            .pop_if_empty()
+            .extend([
+                cache.as_str(),
+                BUILD_TRACE_PREFIX,
+                drv_name,
+                &format!("{output_name}{BUILD_TRACE_SUFFIX}"),
+            ]);
+
+        let payload = BuildTraceEntry {
+            out_path: out_path.to_owned(),
+            signatures: Vec::new(),
+        };
+
+        let res = self.client.put(endpoint).json(&payload).send().await?;
+
+        if res.status().is_success() {
+            Ok(())
         } else {
             let api_error = ApiError::try_from_response(res).await?;
             Err(api_error.into())
