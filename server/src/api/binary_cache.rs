@@ -12,7 +12,7 @@ use std::sync::Arc;
 use axum::http;
 use axum::{
     body::Body,
-    extract::{Extension, Path},
+    extract::{Extension, Json, Path},
     http::StatusCode,
     response::{IntoResponse, Redirect, Response},
     routing::get,
@@ -24,13 +24,17 @@ use serde::Serialize;
 use tokio_util::io::ReaderStream;
 use tracing::instrument;
 
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+use crate::database::entity::build_trace::{self, Entity as BuildTrace};
 use crate::database::entity::chunk::ChunkModel;
 use crate::database::AtticDatabase;
-use crate::error::{ErrorKind, ServerResult};
+use crate::error::{ErrorKind, ServerError, ServerResult};
 use crate::narinfo::NarInfo;
 use crate::nix_manifest;
 use crate::storage::{Download, StorageBackend};
 use crate::{RequestState, State};
+use attic::api::v1::build_trace::{BuildTraceEntry, BUILD_TRACE_PREFIX, BUILD_TRACE_SUFFIX};
 use attic::cache::CacheName;
 use attic::io::merge_chunks;
 use attic::mime;
@@ -279,9 +283,76 @@ async fn get_nar(
     }
 }
 
+/// Resolves a derivation output to its realized store path.
+///
+/// - GET `/:cache/build-trace-v2/{drvName}.drv/{outputName}.doi`
+#[instrument(skip_all, fields(cache_name, drv_path, output))]
+async fn get_build_trace(
+    Extension(state): Extension<State>,
+    Extension(req_state): Extension<RequestState>,
+    Path((cache_name, drv_path, output)): Path<(CacheName, String, String)>,
+) -> ServerResult<Json<BuildTraceEntry>> {
+    let output_name = output
+        .strip_suffix(BUILD_TRACE_SUFFIX)
+        .ok_or_else(|| ServerError::from(ErrorKind::NotFound))?;
+
+    let database = state.database().await?;
+    let cache = req_state
+        .auth
+        .auth_cache(database, &cache_name, |cache, permission| {
+            permission.require_pull()?;
+            Ok(cache)
+        })
+        .await?;
+
+    req_state.set_public_cache(cache.is_public);
+
+    tracing::debug!(
+        "Received build trace request for {}!{} in {:?}",
+        drv_path,
+        output_name,
+        cache_name
+    );
+
+    let entry = BuildTrace::find()
+        .filter(build_trace::Column::CacheId.eq(cache.id))
+        .filter(build_trace::Column::DrvPath.eq(drv_path))
+        .filter(build_trace::Column::OutputName.eq(output_name))
+        .one(database)
+        .await
+        .map_err(ServerError::database_error)?
+        .ok_or_else(|| ServerError::from(ErrorKind::NoSuchObject))?;
+
+    // This handler repeats the object lookup the upload already did, because a
+    // trace outlives the object a GC reaps. Serving such a trace makes this
+    // cache assert a store path it holds no NAR for, and the client may then
+    // fetch that path from some other cache.
+    let out_path_hash = StorePathHash::new(entry.out_path_hash)
+        .map_err(|_| ServerError::from(ErrorKind::NoSuchObject))?;
+    let object = database
+        .find_object_by_store_path_hash(cache.id, &out_path_hash)
+        .await?;
+
+    // The name has to match as well, because an object upsert can change
+    // `store_path` under a fixed hash, which leaves the trace naming a path
+    // this cache no longer claims.
+    if object.store_path_base_name() != Some(entry.out_path.as_str()) {
+        return Err(ErrorKind::NoSuchObject.into());
+    }
+
+    Ok(Json(BuildTraceEntry {
+        out_path: entry.out_path,
+        signatures: entry.signatures.0,
+    }))
+}
+
 pub fn get_router() -> Router {
     Router::new()
         .route("/{cache}/nix-cache-info", get(get_nix_cache_info))
         .route("/{cache}/{path}", get(get_store_path_info))
         .route("/{cache}/nar/{path}", get(get_nar))
+        .route(
+            &format!("/{{cache}}/{BUILD_TRACE_PREFIX}/{{drv_path}}/{{output}}"),
+            get(get_build_trace),
+        )
 }

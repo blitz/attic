@@ -1,3 +1,4 @@
+mod build_trace;
 mod cache_config;
 mod get_missing_paths;
 mod upload_path;
@@ -7,6 +8,8 @@ use axum::{
     Router,
 };
 
+use attic::api::v1::build_trace::BUILD_TRACE_PREFIX;
+
 pub(crate) fn get_router() -> Router {
     Router::new()
         .route(
@@ -14,6 +17,10 @@ pub(crate) fn get_router() -> Router {
             post(get_missing_paths::get_missing_paths),
         )
         .route("/_api/v1/upload-path", put(upload_path::upload_path))
+        .route(
+            &format!("/{{cache}}/{BUILD_TRACE_PREFIX}/{{drv_path}}/{{output}}"),
+            put(build_trace::put_build_trace),
+        )
         .route(
             "/{cache}/attic-cache-info",
             get(cache_config::get_cache_config),
