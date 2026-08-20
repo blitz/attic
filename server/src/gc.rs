@@ -16,6 +16,7 @@ use tracing::instrument;
 
 use super::{State, StateInner};
 use crate::config::Config;
+use crate::database::entity::build_trace::{self, Entity as BuildTrace};
 use crate::database::entity::cache::{self, Entity as Cache};
 use crate::database::entity::chunk::{self, ChunkState, Entity as Chunk};
 use crate::database::entity::chunkref::{self, Entity as ChunkRef};
@@ -55,6 +56,7 @@ pub async fn run_garbage_collection_once(config: Config) -> Result<()> {
 
     let state = StateInner::new(config).await;
     run_time_based_garbage_collection(&state).await?;
+    run_reap_dangling_build_traces(&state).await?;
     run_reap_orphan_nars(&state).await?;
     run_reap_orphan_chunks(&state).await?;
 
@@ -118,6 +120,41 @@ async fn run_time_based_garbage_collection(state: &State) -> Result<()> {
     }
 
     tracing::info!("Deleted {} objects in total", objects_deleted);
+
+    Ok(())
+}
+
+/// Deletes build traces that no longer resolve to an object in their cache.
+///
+/// Reaping an object leaves its trace behind, advertising a resolution this
+/// cache can no longer satisfy.
+#[instrument(skip_all)]
+async fn run_reap_dangling_build_traces(state: &State) -> Result<()> {
+    let db = state.database().await?;
+
+    // A correlated `NOT EXISTS` lets the planner make one pass over
+    // `build_trace` and probe `object` through its index.
+    let object_for_trace = Query::select()
+        .expr(Expr::val(1))
+        .from(Object)
+        .and_where(
+            object::Column::CacheId
+                .into_expr()
+                .eq(build_trace::Column::CacheId.into_expr()),
+        )
+        .and_where(
+            object::Column::StorePathHash
+                .into_expr()
+                .eq(build_trace::Column::OutPathHash.into_expr()),
+        )
+        .to_owned();
+
+    let deletion = BuildTrace::delete_many()
+        .filter(Expr::exists(object_for_trace).not())
+        .exec(db)
+        .await?;
+
+    tracing::info!("Deleted {} dangling build traces", deletion.rows_affected);
 
     Ok(())
 }
