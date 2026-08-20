@@ -42,6 +42,17 @@ pub trait AtticDatabase: Send + Sync {
         include_chunks: bool,
     ) -> ServerResult<(ObjectModel, CacheModel, NarModel, Vec<Option<ChunkModel>>)>;
 
+    /// Retrieves an object in a binary cache by its store path hash.
+    ///
+    /// Unlike `find_object_and_chunks_by_store_path_hash` this touches only
+    /// the object table, for callers that hold a cache ID already and need
+    /// nothing from the NAR.
+    async fn find_object_by_store_path_hash(
+        &self,
+        cache_id: i64,
+        store_path_hash: &StorePathHash,
+    ) -> ServerResult<ObjectModel>;
+
     /// Retrieves a binary cache.
     async fn find_cache(&self, cache: &CacheName) -> ServerResult<CacheModel>;
 
@@ -221,6 +232,20 @@ impl AtticDatabase for DatabaseConnection {
         }
 
         Ok((object, cache, nar, chunks))
+    }
+
+    async fn find_object_by_store_path_hash(
+        &self,
+        cache_id: i64,
+        store_path_hash: &StorePathHash,
+    ) -> ServerResult<ObjectModel> {
+        Object::find()
+            .filter(object::Column::CacheId.eq(cache_id))
+            .filter(object::Column::StorePathHash.eq(store_path_hash.as_str()))
+            .one(self)
+            .await
+            .map_err(ServerError::database_error)?
+            .ok_or_else(|| ErrorKind::NoSuchObject.into())
     }
 
     async fn find_cache(&self, cache: &CacheName) -> ServerResult<CacheModel> {

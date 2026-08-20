@@ -2,7 +2,7 @@
 //!
 //! It's backed by a NAR in the global cache.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use sea_orm::entity::prelude::*;
@@ -115,6 +115,16 @@ impl InsertExt for Insert<ActiveModel> {
 }
 
 impl Model {
+    /// Returns the base name of the store path this object caches.
+    ///
+    /// `store_path` is the full path, as supplied by the client that uploaded
+    /// it, so this can be `None` for a stored value that is not a path.
+    pub fn store_path_base_name(&self) -> Option<&str> {
+        Path::new(&self.store_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+    }
+
     /// Converts this object to a NarInfo.
     pub fn to_nar_info(&self, nar: &NarModel) -> ServerResult<NarInfo> {
         let nar_size = nar
