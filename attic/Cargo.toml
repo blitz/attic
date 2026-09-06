@@ -19,7 +19,7 @@ serde_with.workspace = true
 sha2.workspace = true
 
 ed25519-compact = "2.2.0"
-fastcdc = "4.0.1"
+fastcdc = "5.0.0"
 nix-base32 = "0.2.0"
 pin-project = "1.1.10"
 tempfile = "3"
@@ -46,7 +46,7 @@ features = [
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports", "async_tokio"] }
-fastcdc = { version = "4.0.1", features = ["tokio"] }
+fastcdc = { version = "5.0.0", features = ["tokio"] }
 serde_json.workspace = true
 
 [features]
