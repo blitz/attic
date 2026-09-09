@@ -5,7 +5,8 @@ let
   serverConfigFile = config.nodes.server.services.cellerd.configFile;
 
   cmd = {
-    make-token = "celler admin make-token --signing-key /etc/cellerd-secret --signing-algorithm hs256";
+    # Never use keys like this in production. They will be copied to the world-readable Nix store.
+    make-token = "celler admin make-token --signing-key ${./testing_private_key.pem} --signing-algorithm rs256";
     cellerd = "cellerd -f ${serverConfigFile}";
   };
 
@@ -168,19 +169,13 @@ in {
           (storageModules.${config.storage}.server or {})
         ];
 
-        # For testing only. Don't put secrets into world-readable files.
-        environment.etc."cellerd-secret".text = ''
-          It doesn't matter what's in this file. It's used as the secret key for HS256 signing.
-        '';
-
         services.cellerd = {
           enable = true;
           settings = {
             listen = "[::]:8080";
 
             jwt = {
-              # For testing only. Don't put secrets into world-readable files.
-              hs256-secret-key-file = "/etc/cellerd-secret";
+              rs256-public-key-file = ./testing_public_key.pem;
             };
 
             chunking = {
