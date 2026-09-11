@@ -2,7 +2,7 @@ use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Result, Context};
 use clap::{Parser, ValueEnum};
 use tokio::join;
 use tokio::task::spawn;
@@ -68,7 +68,8 @@ async fn main() -> Result<()> {
     check_legacy_config()?;
 
     let config =
-        config::load_config(opts.config.as_deref()).await?;
+        config::load_config(opts.config.as_deref())
+            .await.context("Failed to load configuration file. Please refer to the documentation: https://celler.x86.lol/")?;
 
     match opts.mode {
         ServerMode::Monolithic => {
