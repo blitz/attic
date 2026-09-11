@@ -1,56 +1,23 @@
 # Tutorial
 
-Let's spin up Celler in just 15 minutes (yes, it works on macOS too!):
-
-```bash
-$ nix shell github:blitz/celler
-```
-
-Simply run `cellerd` to start the server in monolithic mode with a SQLite database and local storage:
-
-```console
-$ cellerd
-Celler Server 0.1.0 (release)
-
------------------
-Welcome to Celler!
-
-A simple setup using SQLite and local storage has been configured for you in:
-
-    /home/blitz/.config/celler/server.toml
-
-Run the following command to log into this server:
-
-    celler login local http://localhost:8080 eyJ...
-
-Enjoy!
------------------
-
-Running migrations...
-* Migrating NARs to chunks...
-* Migrating NAR schema...
-Starting API server...
-Listening on [::]:8080...
-```
-
-> [!CAUTION]
-> The token printed by `cellerd` is an all-powerful token that can access any cache. Use it with caution and keep it secure.
+Let's spin up Celler! The easiest way to get started is to run the server on a NixOS system.Follow the [deployment guide](admin-guide/deployment.html) to set up your instance.
 
 ## Cache Creation
 
-`cellerd` is the server, and `celler` is the client.
+First, let's create a token that can create the `hello` cache and access it. During the deployment, you created a private key that you can use to create tokens. We will need it now.
 
-First, let's create a token that can create the `hello` cache and access it. On the server, run the following command to create a token (or use the all-powerful token printed by `cellerd`):
+Run the following command to create a token:
 
 ```console
-$ celleradm make-token --sub alice --validity '3 months' --pull 'hello' --push 'hello' --configure 'hello' --create-cache 'hello'
+$ celler admin make-token --signing-key private-key.pem --signing-algorithm=rs256 \
+  --sub alice --validity '3 months' --pull 'hello' --push 'hello' --configure-cache 'hello' \ --create-cache 'hello'
 eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhbGljZSIsImV4cCI6MTY4MDI5MzQyNSwiaHR0cHM6Ly9qd3QuYXR0aWMucnMvdjEiOnsiY2FjaGVzIjp7ImFsaWNlLSoiOnsiciI6MSwidyI6MSwiY2MiOjF9fX19.MkSnK6yGDWYUVnYiJF3tQgdTlqstfWlbziFWUr-lKUk
 ```
 
 We can now log in and create a cache:
 
 ```console
-# Copy and paste the token from the celleradm output above
+# Copy and paste the token from the celler admin output above
 $ celler login local http://localhost:8080 eyJ...
 ✍️ Configuring server "local"
 
@@ -106,7 +73,8 @@ Celler performs stateless authentication using signed JWT tokens which contain p
 Let's create a token that can only access the `hello` cache:
 
 ```console
-$ celleradm make-token --sub alice --validity '3 months' --pull hello --push hello
+$ celler admin make-token --signing-key private-key.pem --signing-algorithm=rs256 \
+  --sub alice --validity '3 months' --pull hello --push hello
 eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhbGljZSIsImV4cCI6MTY4MDI5MzMzOSwiaHR0cHM6Ly9qd3QuYXR0aWMucnMvdjEiOnsiY2FjaGVzIjp7ImhlbGxvIjp7InIiOjEsInciOjF9fX19.XJsaVfjrX5l7p9z76836KXP6Vixn41QJUfxjiK7D-LM
 ```
 
@@ -116,7 +84,8 @@ eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhbGljZSIsImV4cCI6MTY4MDI5MzMzOSw
 Let's say Alice wants to have her own caches. Instead of creating caches for her, we can let her do it herself:
 
 ```console
-$ celleradm make-token --sub alice --validity '3 months' --pull 'alice-*' --push 'alice-*' --create-cache 'alice-*'
+$ celler admin make-token --signing-key private-key.pem --signing-algorithm=rs256 \
+  --sub alice --validity '3 months' --pull 'alice-*' --push 'alice-*' --create-cache 'alice-*'
 eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhbGljZSIsImV4cCI6MTY4MDI5MzQyNSwiaHR0cHM6Ly9qd3QuYXR0aWMucnMvdjEiOnsiY2FjaGVzIjp7ImFsaWNlLSoiOnsiciI6MSwidyI6MSwiY2MiOjF9fX19.MkSnK6yGDWYUVnYiJF3tQgdTlqstfWlbziFWUr-lKUk
 ```
 
@@ -204,10 +173,6 @@ In just a few commands, we have:
 ## What's next
 
 > Note: Celler is an early prototype and everything is subject to change! It may be full of holes and APIs may be changed without backward-compatibility. You might even be required to reset the entire database. I would love to have people give it a try, but please keep that in mind ️:)
-
-For a less temporary setup, you can set up `cellerd` with PostgreSQL and S3.
-You should also place it behind a load balancer like NGINX to provide HTTPS.
-Take a look at `~/.config/celler/server.toml` to see what you can configure!
 
 While it's easy to get started by running `cellerd` in monolithic mode, for production use it's best to run different components of `cellerd` separately with `--mode`:
 
