@@ -147,9 +147,7 @@ pub async fn run(sub: &MakeToken) -> Result<()> {
             .map_err(|e| anyhow!("Failed to read signing key: {}", e))?;
 
         let signature_type = match sub.signing_algorithm {
-            SigningAlgorithm::HS256 => {
-                SignatureType::HS256(HS256Key::from_bytes(&secret_key))
-            }
+            SigningAlgorithm::HS256 => SignatureType::HS256(HS256Key::from_bytes(&secret_key)),
             SigningAlgorithm::RS256 => {
                 let secret_key = String::from_utf8(secret_key)
                     .map_err(|e| anyhow!("Cannot decode signing key: {}", e))?;

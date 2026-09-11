@@ -2,7 +2,7 @@ use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use anyhow::{bail, Result, Context};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
 use tokio::join;
 use tokio::task::spawn;
@@ -148,10 +148,12 @@ fn check_legacy_config() -> Result<()> {
             continue;
         }
 
-        bail!("Obsolete environment variable {var} is set. Please adapt your configuration.
+        bail!(
+            "Obsolete environment variable {var} is set. Please adapt your configuration.
 See the migration guide: https://celler.x86.lol/admin-guide/attic-migration.html
 
-If you want to stay on a attic-compatible version, use this Git tag: v0.0.1");
+If you want to stay on a attic-compatible version, use this Git tag: v0.0.1"
+        );
     }
     Ok(())
 }

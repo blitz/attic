@@ -119,14 +119,24 @@ impl NixStore {
         let setup_fn = async move {
             let daemon = daemon_connect().await?;
 
-            daemon.into_nar_from_path(full_store_path_str).result().await.map_err(|e| AtticError::NarFromPathError { reason: e.to_string() })
+            daemon
+                .into_nar_from_path(full_store_path_str)
+                .result()
+                .await
+                .map_err(|e| AtticError::NarFromPathError {
+                    reason: e.to_string(),
+                })
         };
 
         Box::pin(
             stream::once(setup_fn)
                 .then(async |s| match s {
                     Ok(reader) => ReaderStream::new(reader)
-                        .map(|i| i.map_err(|e| AtticError::NarFromPathError { reason: e.to_string() }))
+                        .map(|i| {
+                            i.map_err(|e| AtticError::NarFromPathError {
+                                reason: e.to_string(),
+                            })
+                        })
                         .left_stream(),
                     Err(e) => stream::once(async move { Err(e) }).right_stream(),
                 })

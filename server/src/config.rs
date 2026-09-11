@@ -5,15 +5,13 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use async_compression::Level as CompressionLevel;
 use attic_token::SignatureType;
 use serde::{de, Deserialize};
 use xdg::BaseDirectories;
 
-use crate::access::{
- HS256Key, RS256PublicKey,
-};
+use crate::access::{HS256Key, RS256PublicKey};
 use crate::narinfo::Compression as NixCompression;
 use crate::storage::{LocalStorageConfig, S3StorageConfig};
 
@@ -330,14 +328,17 @@ impl Default for GarbageCollectionConfig {
     }
 }
 
-fn deserialize_rs256_public_key_file<'de, D>(deserializer: D) -> Result<Option<RS256PublicKey>, D::Error>
+fn deserialize_rs256_public_key_file<'de, D>(
+    deserializer: D,
+) -> Result<Option<RS256PublicKey>, D::Error>
 where
     D: de::Deserializer<'de>,
 {
     use de::Error;
 
     let path = PathBuf::deserialize(deserializer)?;
-    let key = RS256PublicKey::from_pem(&std::fs::read_to_string(&path).map_err(Error::custom)?).map_err(Error::custom)?;
+    let key = RS256PublicKey::from_pem(&std::fs::read_to_string(&path).map_err(Error::custom)?)
+        .map_err(Error::custom)?;
 
     Ok(Some(key))
 }
