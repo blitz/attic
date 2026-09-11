@@ -2,7 +2,7 @@ use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::{Parser, ValueEnum};
 use tokio::join;
 use tokio::task::spawn;
@@ -65,6 +65,7 @@ async fn main() -> Result<()> {
 
     init_logging(opts.tokio_console);
     dump_version();
+    check_legacy_config()?;
 
     let config =
         config::load_config(opts.config.as_deref()).await?;
@@ -131,4 +132,25 @@ fn dump_version() {
 
     #[cfg(not(debug_assertions))]
     eprintln!("Celler {} (release)", env!("CARGO_PKG_VERSION"));
+}
+
+fn check_legacy_config() -> Result<()> {
+    let obsolete_env_vars = [
+        "CELLER_SERVER_CONFIG_BASE64",
+        "CELLER_SERVER_TOKEN_HS256_SECRET_BASE64",
+        "CELLER_SERVER_TOKEN_RS256_SECRET_BASE64",
+        "CELLER_SERVER_TOKEN_RS256_PUBKEY_BASE64",
+    ];
+
+    for var in obsolete_env_vars {
+        if std::env::var_os(var).is_none() {
+            continue;
+        }
+
+        bail!("Obsolete environment variable {var} is set. Please adapt your configuration.
+See the migration guide: https://celler.x86.lol/admin-guide/attic-migration.html
+
+If you want to stay on a attic-compatible version, use this Git tag: v0.0.1");
+    }
+    Ok(())
 }
