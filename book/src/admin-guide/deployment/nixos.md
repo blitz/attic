@@ -46,7 +46,7 @@ You can import the module in one of two ways:
       listen = "[::]:8080";
 
       jwt = {
-        rs256-public-key = ./public-key.pem;
+        rs256-public-key-file = ./public-key.pem;
       };
 
       # Data chunking
