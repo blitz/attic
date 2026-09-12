@@ -11,4 +11,3 @@
 - [Reference](./reference/README.md)
     - [celler](./reference/celler-cli.md)
     - [cellerd](./reference/cellerd-cli.md)
-    - [celleradm](./reference/celleradm-cli.md)

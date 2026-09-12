@@ -1,12 +1,12 @@
+use std::path::PathBuf;
+
 use anyhow::{anyhow, Result};
 use chrono::{Duration as ChronoDuration, Utc};
 use clap::Parser;
 use humantime::Duration;
 
-use crate::Opts;
 use attic::cache::CacheNamePattern;
-use attic_server::access::Token;
-use attic_server::config::Config;
+use attic_token::{HS256Key, RS256KeyPair, SignatureType, Token};
 
 /// Generate a new token.
 ///
@@ -17,9 +17,31 @@ use attic_server::config::Config;
 /// $ atticadm make-token --sub "alice" --validity "2y" --pull "dev-*" --push "dev-*" --pull "prod"
 #[derive(Debug, Parser)]
 pub struct MakeToken {
+    /// The signing key to use for the token.
+    ///
+    /// For RS256 specify the path of a PEM file containing the secret key.
+    ///
+    /// For HS256 specify a file that contains the raw secret key (not BASE64-encoded).
+    #[clap(long = "signing-key", value_name = "SECRET_KEY")]
+    signing_key: PathBuf,
+
+    /// The signing algorithm to use for the token.
+    #[clap(long, default_value = "rs256")]
+    signing_algorithm: SigningAlgorithm,
+
     /// The subject of the JWT token.
     #[clap(long)]
     sub: String,
+
+    /// The `iss` claim of the JWT.
+    #[clap(long = "issuer", value_name = "ISSUER")]
+    pub issuer: Option<String>,
+
+    /// The `aud` claim of the JWT.
+    ///
+    /// Can be specified multiple times to allow multiple audiences.
+    #[clap(long = "audience", value_name = "AUDIENCE")]
+    pub audience: Vec<String>,
 
     /// The validity period of the JWT token.
     ///
@@ -82,6 +104,13 @@ pub struct MakeToken {
     destroy_cache_patterns: Vec<CacheNamePattern>,
 }
 
+/// The supported signing algorithms for the token.
+#[derive(Debug, Clone, clap::ValueEnum)]
+enum SigningAlgorithm {
+    RS256,
+    HS256,
+}
+
 macro_rules! grant_permissions {
     ($token:ident, $list:expr, $perm:ident) => {
         for pattern in $list {
@@ -91,8 +120,7 @@ macro_rules! grant_permissions {
     };
 }
 
-pub async fn run(config: Config, opts: Opts) -> Result<()> {
-    let sub = opts.command.as_make_token().unwrap();
+pub async fn run(sub: &MakeToken) -> Result<()> {
     let duration = ChronoDuration::from_std(sub.validity.into())?;
     let exp = Utc::now()
         .checked_add_signed(duration)
@@ -115,12 +143,22 @@ pub async fn run(config: Config, opts: Opts) -> Result<()> {
     if sub.dump_claims {
         println!("{}", serde_json::to_string(token.opaque_claims())?);
     } else {
-        let signature_type = config.jwt.signing_config.into();
+        let secret_key = std::fs::read(&sub.signing_key)
+            .map_err(|e| anyhow!("Failed to read signing key: {}", e))?;
+
+        let signature_type = match sub.signing_algorithm {
+            SigningAlgorithm::HS256 => SignatureType::HS256(HS256Key::from_bytes(&secret_key)),
+            SigningAlgorithm::RS256 => {
+                let secret_key = String::from_utf8(secret_key)
+                    .map_err(|e| anyhow!("Cannot decode signing key: {}", e))?;
+                SignatureType::RS256(RS256KeyPair::from_pem(&secret_key)?)
+            }
+        };
 
         let encoded_token = token.encode(
             &signature_type,
-            &config.jwt.token_bound_issuer,
-            &config.jwt.token_bound_audiences,
+            &sub.issuer,
+            &(!sub.audience.is_empty()).then(|| sub.audience.iter().cloned().collect()),
         )?;
         println!("{}", encoded_token);
     }

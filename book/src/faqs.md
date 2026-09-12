@@ -62,7 +62,7 @@ However, this can be recovered from automatically when any NAR containing the ch
 
 At the moment, Celler cannot automatically detect when a chunk is corrupt or missing.
 Correctly distinguishing between transient and persistent failures is difficult.
-The `celleradm` utility will have the functionality to kill/delete bad chunks.
+The `celler admin` utility will have the functionality to kill/delete bad chunks.
 
 ## How is compression handled?
 

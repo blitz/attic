@@ -235,7 +235,10 @@ impl fmt::Display for StructuredApiError {
 fn build_http_client(token: Option<&str>) -> HttpClient {
     let mut headers = HeaderMap::new();
 
-    headers.insert(USER_AGENT, HeaderValue::from_str(CELLER_USER_AGENT).unwrap());
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_str(CELLER_USER_AGENT).unwrap(),
+    );
 
     if let Some(token) = token {
         let auth_header = HeaderValue::from_str(&format!("bearer {}", token)).unwrap();

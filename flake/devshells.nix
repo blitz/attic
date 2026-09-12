@@ -59,7 +59,7 @@ in
 
         bench = [
           wrk
-        ] ++ lib.optionals pkgs.stdenv.isLinux [
+        ] ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
           perf
         ];
 
@@ -81,16 +81,6 @@ in
           NIX_PATH = "nixpkgs=${pkgs.path}";
         };
       } cfg.extraArgs);
-
-      devShells.demo = pkgs.mkShell {
-        packages = [ self'.packages.default ];
-
-        shellHook = ''
-          >&2 echo
-          >&2 echo '🚀 Run `cellerd` to get started!'
-          >&2 echo
-        '';
-      };
     };
   };
 }

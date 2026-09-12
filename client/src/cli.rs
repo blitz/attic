@@ -7,6 +7,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 use enum_as_inner::EnumAsInner;
 
+use crate::command::admin::{self, Admin};
 use crate::command::cache::{self, Cache};
 use crate::command::get_closure::{self, GetClosure};
 use crate::command::login::{self, Login};
@@ -30,6 +31,7 @@ pub enum Command {
     Push(Push),
     Cache(Cache),
     WatchStore(WatchStore),
+    Admin(Admin),
 
     #[clap(hide = true)]
     GetClosure(GetClosure),
@@ -57,6 +59,7 @@ pub async fn run() -> Result<()> {
         Command::Cache(_) => cache::run(opts).await,
         Command::WatchStore(_) => watch_store::run(opts).await,
         Command::GetClosure(_) => get_closure::run(opts).await,
+        Command::Admin(_) => admin::run(opts).await,
     }
 }
 

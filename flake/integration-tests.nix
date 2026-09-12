@@ -54,7 +54,7 @@ in
       checks = let
         tests = cfg.tests;
         stableTests = lib.mapAttrs' (name: lib.nameValuePair "stable-${name}") cfg.stableTests;
-      in lib.optionalAttrs pkgs.stdenv.isLinux (tests // stableTests);
+      in lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (tests // stableTests);
     };
   };
 }

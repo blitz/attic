@@ -10,9 +10,11 @@ path = "src/main.rs"
 
 [dependencies]
 attic = { workspace = true, default-features = true }
+attic-token = { workspace = true }
 
 anyhow.workspace = true
 bytes.workspace = true
+chrono.workspace = true
 clap = { workspace = true, features = ["env"] }
 displaydoc.workspace = true
 enum-as-inner.workspace = true

@@ -1,22 +1,17 @@
 //! Server configuration.
 
 use std::collections::HashSet;
-use std::env;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use async_compression::Level as CompressionLevel;
 use attic_token::SignatureType;
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use serde::{de, Deserialize};
 use xdg::BaseDirectories;
 
-use crate::access::{
-    decode_token_hs256_secret_base64, decode_token_rs256_pubkey_base64,
-    decode_token_rs256_secret_base64, HS256Key, RS256KeyPair, RS256PublicKey,
-};
+use crate::access::{HS256Key, RS256PublicKey};
 use crate::narinfo::Compression as NixCompression;
 use crate::storage::{LocalStorageConfig, S3StorageConfig};
 
@@ -24,26 +19,6 @@ use crate::storage::{LocalStorageConfig, S3StorageConfig};
 ///
 /// This will be concatenated into `$XDG_CONFIG_HOME/celler`.
 const XDG_PREFIX: &str = "celler";
-
-/// Environment variable storing the Base64-encoded TOML configuration.
-///
-/// This is useful for deploying to certain application platforms like Fly.io
-const ENV_CONFIG_BASE64: &str = "CELLER_SERVER_CONFIG_BASE64";
-
-/// Environment variable storing the base64-encoded HMAC secret (used for signing and verifying
-/// received JWTs).
-const ENV_TOKEN_HS256_SECRET_BASE64: &str = "CELLER_SERVER_TOKEN_HS256_SECRET_BASE64";
-
-/// Environment variable storing the base64-encoded RSA PEM PKCS1 private key (used for signing and
-/// verifying received JWTs).
-const ENV_TOKEN_RS256_SECRET_BASE64: &str = "CELLER_SERVER_TOKEN_RS256_SECRET_BASE64";
-
-/// Environment variable storing the base64-encoded RSA PEM PKCS1 public key (used for verifying
-/// received JWTs only).
-const ENV_TOKEN_RS256_PUBKEY_BASE64: &str = "CELLER_SERVER_TOKEN_RS256_PUBKEY_BASE64";
-
-/// Environment variable storing the database connection string.
-const ENV_DATABASE_URL: &str = "CELLER_SERVER_DATABASE_URL";
 
 /// Configuration for the Attic Server.
 #[derive(Clone, Deserialize, derive_more::Debug)]
@@ -126,18 +101,7 @@ pub struct Config {
     pub garbage_collection: GarbageCollectionConfig,
 
     /// JSON Web Token.
-    #[serde(default = "Default::default")]
     pub jwt: JWTConfig,
-
-    /// (Deprecated Stub)
-    ///
-    /// This simply results in an error telling the user to update
-    /// their configuration.
-    #[serde(rename = "token-hs256-secret-base64")]
-    #[serde(default = "Default::default")]
-    #[serde(deserialize_with = "deserialize_deprecated_token_hs256_secret")]
-    #[debug(skip)]
-    pub _depreated_token_hs256_secret: Option<String>,
 }
 
 /// JSON Web Token configuration.
@@ -159,46 +123,44 @@ pub struct JWTConfig {
     #[serde(default = "Default::default")]
     pub token_bound_audiences: Option<HashSet<String>>,
 
-    /// JSON Web Token signing.
-    #[serde(rename = "signing")]
-    #[serde(default = "load_jwt_signing_config_from_env")]
-    #[debug(skip)]
-    pub signing_config: JWTSigningConfig,
+    /// Accepts a path to a RSA PEM public key file for verifying JWTs via
+    /// RS256.
+    #[serde(deserialize_with = "deserialize_rs256_public_key_file")]
+    #[serde(rename = "rs256-public-key-file")]
+    #[serde(default)]
+    pub rs256_public_key_file: Option<RS256PublicKey>,
+
+    /// Accepts a path to a HMAC secret key file for verifying JWTs via
+    /// HS256.
+    #[serde(deserialize_with = "deserialize_hs256_secret_key_file")]
+    #[serde(rename = "hs256-secret-key-file")]
+    #[serde(default)]
+    pub hs256_secret_key_file: Option<HS256Key>,
 }
 
-/// JSON Web Token signing configuration.
-#[derive(Clone, Deserialize)]
-pub enum JWTSigningConfig {
-    /// JSON Web Token RSA pubkey.
-    ///
-    /// Set this to the base64-encoded RSA PEM PKCS1 public key to use for verifying JWTs only.
-    #[serde(rename = "token-rs256-pubkey-base64")]
-    #[serde(deserialize_with = "deserialize_token_rs256_pubkey_base64")]
-    RS256VerifyOnly(RS256PublicKey),
-
-    /// JSON Web Token RSA secret.
-    ///
-    /// Set this to the base64-encoded RSA PEM PKCS1 private key to use for signing and verifying
-    /// JWTs.
-    #[serde(rename = "token-rs256-secret-base64")]
-    #[serde(deserialize_with = "deserialize_token_rs256_secret_base64")]
-    RS256SignAndVerify(RS256KeyPair),
-
-    /// JSON Web Token HMAC secret.
-    ///
-    /// Set this to the base64-encoded HMAC secret to use for signing and verifying JWTs.
-    #[serde(rename = "token-hs256-secret-base64")]
-    #[serde(deserialize_with = "deserialize_token_hs256_secret_base64")]
-    HS256SignAndVerify(HS256Key),
-}
-
-impl From<JWTSigningConfig> for SignatureType {
-    fn from(value: JWTSigningConfig) -> Self {
-        match value {
-            JWTSigningConfig::RS256VerifyOnly(key) => Self::RS256PubkeyOnly(key),
-            JWTSigningConfig::RS256SignAndVerify(key) => Self::RS256(key),
-            JWTSigningConfig::HS256SignAndVerify(key) => Self::HS256(key),
+impl JWTConfig {
+    /// Validate the JWT signing configuration.
+    fn validate(&self) -> Result<(), anyhow::Error> {
+        // We could handle this more gracefully using a custom deserializer, but this is quite a lot of hassle.
+        if self.rs256_public_key_file.is_none() && self.hs256_secret_key_file.is_none() {
+            bail!("No JWT signing configuration specified. Either rs256-public-key-file or hs256-secret-key-file must be set.");
         }
+        if self.rs256_public_key_file.is_some() && self.hs256_secret_key_file.is_some() {
+            bail!("Both rs256-public-key-file and hs256-secret-key-file are set. Only one can be set at a time.");
+        }
+        Ok(())
+    }
+}
+
+impl From<JWTConfig> for SignatureType {
+    fn from(value: JWTConfig) -> Self {
+        if let Some(key) = value.rs256_public_key_file {
+            return Self::RS256PubkeyOnly(key);
+        }
+        if let Some(key) = value.hs256_secret_key_file {
+            return Self::HS256(key);
+        }
+        panic!("No JWT signing configuration specified. This should not happen.");
     }
 }
 
@@ -206,7 +168,6 @@ impl From<JWTSigningConfig> for SignatureType {
 #[derive(Debug, Clone, Deserialize)]
 pub struct DatabaseConfig {
     /// Connection URL.
-    #[serde(default = "load_database_url_from_env")]
     pub url: String,
 
     /// Whether to enable sending of periodic heartbeat queries.
@@ -231,8 +192,7 @@ pub enum StorageConfig {
 
 /// Data chunking.
 ///
-/// This must be set, but a default set of values is provided
-/// through the OOBE sequence. The reason is that this allows
+/// This must be set. The reason is that this allows
 /// us to provide a new set of recommended "defaults" for newer
 /// deployments without affecting existing ones.
 ///
@@ -324,114 +284,6 @@ pub struct GarbageCollectionConfig {
     pub default_retention_period: Duration,
 }
 
-fn load_jwt_signing_config_from_env() -> JWTSigningConfig {
-    let config = if let Some(config) = load_token_rs256_pubkey_from_env() {
-        config
-    } else if let Some(config) = load_token_rs256_secret_from_env() {
-        config
-    } else if let Some(config) = load_token_hs256_secret_from_env() {
-        config
-    } else {
-        panic!(
-            "\n\
-            You must configure JWT signing and verification inside your TOML \
-            configuration by setting one of the following options in the \
-            [jwt.signing] block:\n\
-            \n\
-            * token-rs256-pubkey-base64\n\
-            * token-rs256-secret-base64\n\
-            * token-hs256-secret-base64\n\
-            \n\
-            or by setting one of the following environment variables:\n\
-            \n\
-            * {ENV_TOKEN_RS256_PUBKEY_BASE64}\n\
-            * {ENV_TOKEN_RS256_SECRET_BASE64}\n\
-            * {ENV_TOKEN_HS256_SECRET_BASE64}\n\
-            \n\
-            Options will be tried in that same order (configuration options \
-            first, then environment options if none of the configuration options \
-            were set, starting with the respective RSA pubkey option, the RSA \
-            secret option, and finally the HMAC secret option). \
-            The first option that is found will be used.\n\
-            \n\
-            If an RS256 pubkey (asymmetric RSA PEM PKCS1 public key) is \
-            provided, it will only be possible to verify received JWTs, and not \
-            sign new JWTs.\n\
-            \n\
-            If an RS256 secret (asymmetric RSA PEM PKCS1 private key) is \
-            provided, it will be used for both signing new JWTs and verifying \
-            received JWTs.\n\
-            \n\
-            If an HS256 secret (symmetric HMAC secret) is provided, it will be \
-            used for both signing new JWTs and verifying received JWTs.\n\
-            "
-        )
-    };
-
-    config
-}
-
-fn read_non_empty_var(key: &str) -> Result<Option<String>> {
-    let value = match env::var(key) {
-        Err(env::VarError::NotPresent) => {
-            return Ok(None);
-        }
-        r => r?,
-    };
-
-    if value.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(value))
-    }
-}
-
-fn load_token_hs256_secret_from_env() -> Option<JWTSigningConfig> {
-    let s = read_non_empty_var(ENV_TOKEN_HS256_SECRET_BASE64)
-        .expect("HS256 environment cannot be read")?;
-
-    let secret = decode_token_hs256_secret_base64(&s).expect("HS256 secret cannot be decoded");
-
-    Some(JWTSigningConfig::HS256SignAndVerify(secret))
-}
-
-fn load_token_rs256_secret_from_env() -> Option<JWTSigningConfig> {
-    let s = read_non_empty_var(ENV_TOKEN_RS256_SECRET_BASE64)
-        .expect("RS256 environment cannot be read")?;
-
-    let secret = decode_token_rs256_secret_base64(&s).expect("RS256 cannot be decoded");
-
-    Some(JWTSigningConfig::RS256SignAndVerify(secret))
-}
-
-fn load_token_rs256_pubkey_from_env() -> Option<JWTSigningConfig> {
-    let s = read_non_empty_var(ENV_TOKEN_RS256_PUBKEY_BASE64)
-        .expect("RS256 pubkey environment cannot be read")?;
-
-    let pubkey = decode_token_rs256_pubkey_base64(&s).expect("RS256 pubkey cannot be decoded");
-
-    Some(JWTSigningConfig::RS256VerifyOnly(pubkey))
-}
-
-fn load_database_url_from_env() -> String {
-    env::var(ENV_DATABASE_URL).unwrap_or_else(|_| {
-        panic!(
-            "Database URL must be specified in either database.url \
-        or the {ENV_DATABASE_URL} environment."
-        )
-    })
-}
-
-impl Default for JWTConfig {
-    fn default() -> Self {
-        Self {
-            token_bound_issuer: None,
-            token_bound_audiences: None,
-            signing_config: load_jwt_signing_config_from_env(),
-        }
-    }
-}
-
 impl CompressionConfig {
     pub fn level(&self) -> CompressionLevel {
         if let Some(level) = self.level {
@@ -476,66 +328,31 @@ impl Default for GarbageCollectionConfig {
     }
 }
 
-fn deserialize_deprecated_token_hs256_secret<'de, D>(
-    _deserializer: D,
-) -> Result<Option<String>, D::Error>
-where
-    D: de::Deserializer<'de>,
-{
-    use de::Error;
-
-    Err(Error::custom(
-        "\n\
-            The token-hs256-secret-base64 field has been moved to [jwt.signing].\n\
-            \n\
-            To continue using HS256 signing, move your current config:\n\
-            \n\
-            token-hs256-secret-base64 = \"your token\"\n\
-            \n\
-            To the bottom of the file like so:\n\
-            \n\
-            [jwt.signing]\n\
-            token-hs256-secret-base64 = \"your token\"\n\
-            ",
-    ))
-}
-
-fn deserialize_token_hs256_secret_base64<'de, D>(deserializer: D) -> Result<HS256Key, D::Error>
-where
-    D: de::Deserializer<'de>,
-{
-    use de::Error;
-
-    let s = String::deserialize(deserializer)?;
-    let key = decode_token_hs256_secret_base64(&s).map_err(Error::custom)?;
-
-    Ok(key)
-}
-
-fn deserialize_token_rs256_secret_base64<'de, D>(deserializer: D) -> Result<RS256KeyPair, D::Error>
-where
-    D: de::Deserializer<'de>,
-{
-    use de::Error;
-
-    let s = String::deserialize(deserializer)?;
-    let key = decode_token_rs256_secret_base64(&s).map_err(Error::custom)?;
-
-    Ok(key)
-}
-
-fn deserialize_token_rs256_pubkey_base64<'de, D>(
+fn deserialize_rs256_public_key_file<'de, D>(
     deserializer: D,
-) -> Result<RS256PublicKey, D::Error>
+) -> Result<Option<RS256PublicKey>, D::Error>
 where
     D: de::Deserializer<'de>,
 {
     use de::Error;
 
-    let s = String::deserialize(deserializer)?;
-    let key = decode_token_rs256_pubkey_base64(&s).map_err(Error::custom)?;
+    let path = PathBuf::deserialize(deserializer)?;
+    let key = RS256PublicKey::from_pem(&std::fs::read_to_string(&path).map_err(Error::custom)?)
+        .map_err(Error::custom)?;
 
-    Ok(key)
+    Ok(Some(key))
+}
+
+fn deserialize_hs256_secret_key_file<'de, D>(deserializer: D) -> Result<Option<HS256Key>, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    use de::Error;
+
+    let path = PathBuf::deserialize(deserializer)?;
+    let key = HS256Key::from_bytes(&std::fs::read(&path).map_err(Error::custom)?);
+
+    Ok(Some(key))
 }
 
 fn default_listen_address() -> SocketAddr {
@@ -570,29 +387,20 @@ fn load_config_from_path(path: &Path) -> Result<Config> {
     tracing::info!("Using configurations: {:?}", path);
 
     let config = std::fs::read_to_string(path)?;
-    Ok(toml::from_str(&config)?)
-}
+    let config: Config = toml::from_str(&config)?;
 
-fn load_config_from_str(s: &str) -> Result<Config> {
-    tracing::info!("Using configurations from environment variable");
-    Ok(toml::from_str(s)?)
+    config.jwt.validate()?;
+
+    Ok(config)
 }
 
 /// Loads the configuration in the standard order.
-pub async fn load_config(config_path: Option<&Path>, allow_oobe: bool) -> Result<Config> {
+pub async fn load_config(config_path: Option<&Path>) -> Result<Config> {
     if let Some(config_path) = config_path {
         load_config_from_path(config_path)
-    } else if let Ok(config_env) = env::var(ENV_CONFIG_BASE64) {
-        let decoded = String::from_utf8(BASE64_STANDARD.decode(config_env.as_bytes())?)?;
-        load_config_from_str(&decoded)
     } else {
         // Config from XDG
         let config_path = get_xdg_config_path()?;
-
-        if allow_oobe {
-            // Special OOBE sequence
-            crate::oobe::run_oobe().await?;
-        }
 
         load_config_from_path(&config_path)
     }

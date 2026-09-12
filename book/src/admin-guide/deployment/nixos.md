@@ -14,16 +14,14 @@ Celler provides [a NixOS module](https://github.com/blitz/celler/blob/main/nixos
 The RS256 JWT secret can be generated with the `openssl` utility:
 
 ```bash
-nix run nixpkgs#openssl -- genrsa -traditional 4096 | base64 -w0
+$ nix shell nixpkgs#openssl
+$ openssl genrsa 4096 -out private-key.pem
+$ openssl rsa -in private-key.pem -pubout -out public-key.pem
 ```
 
-Create a file on the server containing the following contents:
+Keep the private-key.pem file in a secure location. You need it to sign tokens using `celler admin make-token`.
 
-```
-CELLER_SERVER_TOKEN_RS256_SECRET_BASE64="output from above"
-```
-
-Ensure the file is only accessible by root.
+The public key will be part of the server configuration.
 
 ## Importing the Module
 
@@ -47,7 +45,9 @@ You can import the module in one of two ways:
     settings = {
       listen = "[::]:8080";
 
-      jwt = { };
+      jwt = {
+        rs256-public-key-file = ./public-key.pem;
+      };
 
       # Data chunking
       #
@@ -78,8 +78,3 @@ You can import the module in one of two ways:
 
 After the new configuration is deployed, the Celler Server will be accessible on port 8080.
 It's highly recommended to place it behind a reverse proxy like [NGINX](https://nixos.wiki/wiki/Nginx) to provide HTTPS.
-
-## Operations
-
-The NixOS module installs the `cellerd-celleradm` wrapper which runs the `celleradm` command as the `cellerd` user.
-Use this command to [generate new tokens](../../reference/celleradm-cli.md#celleradm-make-token) to be distributed to users.

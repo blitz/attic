@@ -30,7 +30,6 @@ in stdenv.mkDerivation {
 
     emitColorizedHelp celler
     emitColorizedHelp cellerd
-    emitColorizedHelp celleradm
 
     mdbook build -d ./build
     cp -r ./build $out
